@@ -120,6 +120,9 @@
         <button class="ghost-btn" id="saveUrlBtn">Salvar</button>
       </div>
       <div class="hint">Cole aqui a URL gerada ao implantar o Apps Script na planilha (veja instruções enviadas pelo coordenador). Fica salva neste aparelho/navegador.</div>
+      <div class="config-row" style="margin-top:8px;">
+        <button class="ghost-btn" id="testConnBtn" style="width:100%;">🔎 Testar conexão com a planilha</button>
+      </div>
       <div class="config-status" id="configStatus"></div>
     </div>
   </div>
@@ -273,6 +276,36 @@
     loadList();
   });
   refreshConfigVisibility();
+
+  document.getElementById('testConnBtn').addEventListener('click', async function() {
+    var url = webAppUrlInput.value.trim() || getWebAppUrl();
+    if (!url) {
+      configStatus.className = 'config-status err';
+      configStatus.textContent = 'Cole a URL antes de testar.';
+      return;
+    }
+    configStatus.className = 'config-status';
+    configStatus.textContent = 'Testando…';
+    try {
+      var res = await fetch(url, { method: 'GET' });
+      var text = await res.text();
+      var parsed;
+      try { parsed = JSON.parse(text); } catch (e2) { parsed = null; }
+      if (Array.isArray(parsed)) {
+        configStatus.className = 'config-status ok';
+        configStatus.textContent = '✓ Conectado! A planilha tem ' + parsed.length + ' registro(s) salvo(s).';
+      } else if (text.indexOf('accounts.google.com') !== -1 || text.indexOf('ServiceLogin') !== -1) {
+        configStatus.className = 'config-status err';
+        configStatus.textContent = '✗ O Google está pedindo login. Verifique se, na implantação, "Quem pode acessar" está como "Qualquer pessoa".';
+      } else {
+        configStatus.className = 'config-status err';
+        configStatus.textContent = '✗ Resposta inesperada. Confira se a URL termina em /exec e se o código do Apps Script está correto.';
+      }
+    } catch (e) {
+      configStatus.className = 'config-status err';
+      configStatus.textContent = '✗ Não foi possível conectar (erro de rede ou CORS). Confira a URL e tente novamente.';
+    }
+  });
 
   // ---- Tabs ----
   var tabNewBtn = document.getElementById('tabNewBtn');
@@ -451,18 +484,30 @@
     submitBtn.textContent = 'Salvando…';
 
     try {
-      await fetch(webAppUrl, {
+      var resp = await fetch(webAppUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
-      msg.className = 'msg ok show';
-      msg.textContent = 'Visita registrada com sucesso na planilha!';
-      document.getElementById('visitForm').reset();
-      document.getElementById('data').value = todayStr();
-      Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
-      statusSeg.children[0].classList.add('on');
-      statusVal = 'concluida';
+      var text = await resp.text();
+      var parsed = null;
+      try { parsed = JSON.parse(text); } catch (e2) { /* not JSON */ }
+
+      if (parsed && parsed.ok === true) {
+        msg.className = 'msg ok show';
+        msg.textContent = 'Visita registrada com sucesso na planilha!';
+        document.getElementById('visitForm').reset();
+        document.getElementById('data').value = todayStr();
+        Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
+        statusSeg.children[0].classList.add('on');
+        statusVal = 'concluida';
+      } else if (parsed && parsed.ok === false) {
+        msg.className = 'msg err show';
+        msg.textContent = 'O Google recusou o salvamento: ' + (parsed.error || 'erro desconhecido') + '. Avise o coordenador.';
+      } else {
+        msg.className = 'msg err show';
+        msg.textContent = 'Resposta inesperada do servidor. Use "🔎 Testar conexão" nas configurações para diagnosticar.';
+      }
     } catch (err) {
       msg.className = 'msg err show';
       msg.textContent = 'Não foi possível salvar. Verifique sua conexão com a internet e tente novamente.';
