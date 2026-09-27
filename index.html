@@ -545,14 +545,34 @@
     submitBtn.textContent = 'Salvando…';
 
     try {
+      var beforeData = null;
+      try { beforeData = await jsonp(webAppUrl); } catch (e0) { beforeData = null; }
+      var beforeCount = Array.isArray(beforeData) ? beforeData.length : null;
+
       await submitViaHiddenForm(webAppUrl, payload);
-      msg.className = 'msg ok show';
-      msg.textContent = 'Visita enviada! Confira em alguns segundos na aba "Visitas registradas" para confirmar que foi salva.';
-      document.getElementById('visitForm').reset();
-      document.getElementById('data').value = todayStr();
-      Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
-      statusSeg.children[0].classList.add('on');
-      statusVal = 'concluida';
+
+      // pequena espera para a planilha processar antes de conferir
+      await new Promise(function(r) { setTimeout(r, 1800); });
+
+      var afterData = null;
+      try { afterData = await jsonp(webAppUrl); } catch (e1) { afterData = null; }
+      var afterCount = Array.isArray(afterData) ? afterData.length : null;
+
+      if (beforeCount !== null && afterCount !== null && afterCount > beforeCount) {
+        msg.className = 'msg ok show';
+        msg.textContent = 'Visita salva e confirmada na planilha!';
+        document.getElementById('visitForm').reset();
+        document.getElementById('data').value = todayStr();
+        Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
+        statusSeg.children[0].classList.add('on');
+        statusVal = 'concluida';
+      } else if (beforeCount === null || afterCount === null) {
+        msg.className = 'msg err show';
+        msg.textContent = 'Não conseguimos confirmar o salvamento (sem conexão com a planilha agora). Sua rede pode estar bloqueando o acesso ao Google. Tente usar dados móveis (4G) em vez do Wi-Fi, e confira depois direto no Google Sheets.';
+      } else {
+        msg.className = 'msg err show';
+        msg.textContent = 'O envio não chegou à planilha (provável bloqueio da rede Wi-Fi ao Google). Tente novamente usando dados móveis (4G) em vez do Wi-Fi da prefeitura.';
+      }
     } catch (err) {
       msg.className = 'msg err show';
       msg.textContent = 'Não foi possível enviar. Verifique sua conexão com a internet e tente novamente.';
