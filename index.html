@@ -227,6 +227,7 @@
     <div id="listContainer"><div class="loading">Configure o link da planilha para começar.</div></div>
   </section>
 </div>
+<iframe name="hiddenIframe" id="hiddenIframe" style="display:none;"></iframe>
 
 <script>
 (function() {
@@ -287,23 +288,17 @@
     configStatus.className = 'config-status';
     configStatus.textContent = 'Testando…';
     try {
-      var res = await fetch(url, { method: 'GET' });
-      var text = await res.text();
-      var parsed;
-      try { parsed = JSON.parse(text); } catch (e2) { parsed = null; }
+      var parsed = await jsonp(url);
       if (Array.isArray(parsed)) {
         configStatus.className = 'config-status ok';
         configStatus.textContent = '✓ Conectado! A planilha tem ' + parsed.length + ' registro(s) salvo(s).';
-      } else if (text.indexOf('accounts.google.com') !== -1 || text.indexOf('ServiceLogin') !== -1) {
-        configStatus.className = 'config-status err';
-        configStatus.textContent = '✗ O Google está pedindo login. Verifique se, na implantação, "Quem pode acessar" está como "Qualquer pessoa".';
       } else {
         configStatus.className = 'config-status err';
-        configStatus.textContent = '✗ Resposta inesperada. Confira se a URL termina em /exec e se o código do Apps Script está correto.';
+        configStatus.textContent = '✗ Resposta inesperada. Confira se a URL termina em /exec e se o código do Apps Script (versão nova, com JSONP) foi implantado.';
       }
     } catch (e) {
       configStatus.className = 'config-status err';
-      configStatus.textContent = '✗ Não foi possível conectar (erro de rede ou CORS). Confira a URL e tente novamente.';
+      configStatus.textContent = '✗ Não foi possível conectar. Confira a URL e se a implantação está com acesso "Qualquer pessoa".';
     }
   });
 
@@ -338,6 +333,73 @@
     return { text: 'Concluída', cls: 'ok' };
   }
 
+  // ---- JSONP (contorna CORS para leitura) ----
+  function jsonp(url) {
+    return new Promise(function(resolve, reject) {
+      var cbName = 'jsonpCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      var script = document.createElement('script');
+      var settled = false;
+      function cleanup() {
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+      window[cbName] = function(data) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(data);
+      };
+      script.onerror = function() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('Falha ao carregar (jsonp)'));
+      };
+      var sep = url.indexOf('?') === -1 ? '?' : '&';
+      script.src = url + sep + 'callback=' + cbName;
+      document.body.appendChild(script);
+      setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('Tempo esgotado'));
+      }, 8000);
+    });
+  }
+
+  // ---- Envio via formulário oculto (contorna CORS para escrita) ----
+  function submitViaHiddenForm(url, data) {
+    return new Promise(function(resolve) {
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = url;
+      form.target = 'hiddenIframe';
+      form.style.display = 'none';
+
+      Object.keys(data).forEach(function(key) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = (data[key] === undefined || data[key] === null) ? '' : String(data[key]);
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      var iframe = document.getElementById('hiddenIframe');
+      var settled = false;
+      function done() {
+        if (settled) return;
+        settled = true;
+        iframe.removeEventListener('load', done);
+        if (form.parentNode) form.parentNode.removeChild(form);
+        resolve();
+      }
+      iframe.addEventListener('load', done);
+      setTimeout(done, 3500);
+      form.submit();
+    });
+  }
+
   function esc(s) {
     if (s === undefined || s === null) return '';
     return String(s).replace(/[&<>"']/g, function(c) {
@@ -362,8 +424,7 @@
     }
     container.innerHTML = '<div class="loading">Carregando registros…</div>';
     try {
-      var res = await fetch(url, { method: 'GET' });
-      var data = await res.json();
+      var data = await jsonp(url);
       allVisits = Array.isArray(data) ? data : [];
       renderList();
     } catch (e) {
@@ -484,33 +545,17 @@
     submitBtn.textContent = 'Salvando…';
 
     try {
-      var resp = await fetch(webAppUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      var text = await resp.text();
-      var parsed = null;
-      try { parsed = JSON.parse(text); } catch (e2) { /* not JSON */ }
-
-      if (parsed && parsed.ok === true) {
-        msg.className = 'msg ok show';
-        msg.textContent = 'Visita registrada com sucesso na planilha!';
-        document.getElementById('visitForm').reset();
-        document.getElementById('data').value = todayStr();
-        Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
-        statusSeg.children[0].classList.add('on');
-        statusVal = 'concluida';
-      } else if (parsed && parsed.ok === false) {
-        msg.className = 'msg err show';
-        msg.textContent = 'O Google recusou o salvamento: ' + (parsed.error || 'erro desconhecido') + '. Avise o coordenador.';
-      } else {
-        msg.className = 'msg err show';
-        msg.textContent = 'Resposta inesperada do servidor. Use "🔎 Testar conexão" nas configurações para diagnosticar.';
-      }
+      await submitViaHiddenForm(webAppUrl, payload);
+      msg.className = 'msg ok show';
+      msg.textContent = 'Visita enviada! Confira em alguns segundos na aba "Visitas registradas" para confirmar que foi salva.';
+      document.getElementById('visitForm').reset();
+      document.getElementById('data').value = todayStr();
+      Array.prototype.forEach.call(statusSeg.children, function(c) { c.classList.remove('on'); });
+      statusSeg.children[0].classList.add('on');
+      statusVal = 'concluida';
     } catch (err) {
       msg.className = 'msg err show';
-      msg.textContent = 'Não foi possível salvar. Verifique sua conexão com a internet e tente novamente.';
+      msg.textContent = 'Não foi possível enviar. Verifique sua conexão com a internet e tente novamente.';
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Salvar registro de visita';
